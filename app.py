@@ -4,6 +4,7 @@ import requests
 import os
 import streamlit.components.v1 as components
 from datetime import datetime
+import hashlib
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="CNHS Robotics Hub", page_icon="🤖", layout="wide")
@@ -114,20 +115,36 @@ def get_badge(points):
 DB_FILE = "cnhs_data.csv"
 
 
+# --- PASSWORD ENCRYPTION ---
+def hash_password(password):
+    """Encrypts a password so it's not stored as plain text."""
+    return hashlib.sha256(str.encode(password)).hexdigest()
+
+
+# --- DATABASE MANAGEMENT (CSV) ---
+DB_FILE = "cnhs_data.csv"
+
+
 def load_data():
     if not os.path.exists(DB_FILE):
-        # Added 'Password' column here
         df = pd.DataFrame(columns=["Username", "Password", "Points", "Role"])
         df.to_csv(DB_FILE, index=False)
 
     df = pd.read_csv(DB_FILE)
 
-    # Safety check: If you already have a CSV without a Password column, this adds it
-    if "Password" not in df.columns:
-        df["Password"] = "1234"  # Default password for old accounts
-        save_data(df)
+    # Ensure all required columns exist (Legacy Support)
+    for col in ["Username", "Password", "Points", "Role"]:
+        if col not in df.columns:
+            if col == "Points":
+                df[col] = 0
+            elif col == "Role":
+                df[col] = "Student"
+            elif col == "Password":
+                df[col] = hash_password("1234")  # Default secure password
 
+    save_data(df)
     return df
+
 
 def save_data(df):
     df.to_csv(DB_FILE, index=False)
@@ -149,38 +166,73 @@ if "logged_in" not in st.session_state:
     st.session_state.username = ""
     st.session_state.points = 0
     st.session_state.role = "Student"
+    st.session_state.confirm_logout = False
 
 
 # --- LOGIN / ONBOARDING SCREEN ---
 def login_screen():
     st.title("Welcome to CNHS Robotics & Coding 🤖")
-    st.write("Please log in to track your progress and earn badges.")
+    st.write("Secure student portal. Please log in.")
 
     col1, col2 = st.columns([1, 1])
     with col1:
         with st.container(border=True):
-            st.subheader("Student Login")
+            st.subheader("Student Portal")
             df = load_data()
-            user_input = st.text_input("Enter your Username (or create a new one):").strip()
 
-            if st.button("Enter Hub"):
-                if user_input:
-                    if user_input not in df["Username"].values:
-                        # Register new user
-                        new_user = pd.DataFrame([{"Username": user_input, "Points": 0, "Role": "Student"}])
-                        df = pd.concat([df, new_user], ignore_index=True)
-                        save_data(df)
-                        st.success(f"Account created for {user_input}!")
+            # 1. Ask for Username first
+            username = st.text_input("Username").strip()
 
-                    # Log them in
-                    user_data = df[df["Username"] == user_input].iloc[0]
-                    st.session_state.username = user_data["Username"]
-                    st.session_state.points = user_data["Points"]
-                    st.session_state.role = user_data["Role"]
-                    st.session_state.logged_in = True
-                    st.rerun()
+            if username:
+                # 2. Check if username exists
+                if username in df["Username"].values:
+                    # LOGIN MODE
+                    st.info(f"Welcome back, {username}!")
+                    password = st.text_input("Password", type="password")
+
+                    if st.button("Login"):
+                        stored_password = str(df.loc[df["Username"] == username, "Password"].values[0])
+
+                        # Verify hash (or plain text if upgrading legacy account)
+                        if hash_password(password) == stored_password or password == stored_password:
+                            user_data = df[df["Username"] == username].iloc[0]
+                            st.session_state.logged_in = True
+                            st.session_state.username = username
+                            st.session_state.points = user_data["Points"]
+                            st.session_state.role = user_data["Role"]
+
+                            # Upgrade legacy plain-text passwords to hash automatically
+                            if password == stored_password:
+                                df.loc[df["Username"] == username, "Password"] = hash_password(password)
+                                save_data(df)
+
+                            st.rerun()
+                        else:
+                            st.error("❌ Incorrect password. Try again.")
                 else:
-                    st.error("Please enter a username.")
+                    # REGISTRATION MODE
+                    st.warning("Username not found. Register a new account below.")
+                    new_pass = st.text_input("Create Password", type="password")
+                    confirm_pass = st.text_input("Confirm Password", type="password")
+
+                    if st.button("Create Account"):
+                        if not new_pass:
+                            st.error("Password cannot be empty!")
+                        elif new_pass != confirm_pass:
+                            st.error("Passwords do not match!")
+                        else:
+                            new_user = pd.DataFrame([{
+                                "Username": username,
+                                "Password": hash_password(new_pass),
+                                "Points": 0,
+                                "Role": "Student"
+                            }])
+                            df = pd.concat([df, new_user], ignore_index=True)
+                            save_data(df)
+                            st.success("Account created successfully! You can now log in.")
+                            st.balloons()
+            else:
+                st.write("Enter your username to begin.")
 
     with col2:
         lottie_bot = load_lottieurl("https://assets10.lottiefiles.com/packages/lf20_xh83pj1c.json")
@@ -189,9 +241,32 @@ def login_screen():
             st_lottie(lottie_bot, height=250, key="login_bot")
 
 
+# --- USER SETTINGS (CHANGE PASSWORD) ---
+def show_settings():
+    st.title("Account Settings ⚙️")
+    with st.container(border=True):
+        st.subheader("Change Password")
+        current_p = st.text_input("Current Password", type="password")
+        new_p = st.text_input("New Password", type="password")
+        confirm_p = st.text_input("Confirm New Password", type="password")
+
+        if st.button("Update Password"):
+            df = load_data()
+            stored_p = str(df.loc[df["Username"] == st.session_state.username, "Password"].values[0])
+
+            if hash_password(current_p) != stored_p and current_p != stored_p:
+                st.error("Current password incorrect.")
+            elif not new_p:
+                st.error("New password cannot be empty.")
+            elif new_p != confirm_p:
+                st.error("New passwords do not match.")
+            else:
+                df.loc[df["Username"] == st.session_state.username, "Password"] = hash_password(new_p)
+                save_data(df)
+                st.success("✅ Password updated successfully!")
 # --- MAIN DASHBOARD VIEWS ---
 def show_home():
-    st.title("CNHS ROBOTICS DASHBOARD🏠")
+    st.title("HOME🏠")
 
     # User Stats Container
     with st.container(border=True):
@@ -213,8 +288,8 @@ def show_robotics_lab():
     tab1, tab2, tab3 = st.tabs(["🚦 Basic LEDs", "🦇 Sumo Ultrasonic", "⚙️ Button-buzzer Control"])
 
     with tab1:
-        st.subheader("4-LED Chaser Circuit")
-        components.iframe("https://wokwi.com/projects/305572505675006528", height=500)
+        st.subheader("Basic LED Circuit")
+        components.iframe("https://wokwi.com/projects/375659283936335873", height=500)
 
     with tab2:
         st.subheader("HC-SR04 Distance Logic")
@@ -340,6 +415,7 @@ def show_admin():
 
 
 # --- MAIN APP LOGIC ---
+# --- MAIN APP LOGIC ---
 load_css()
 
 if not st.session_state.logged_in:
@@ -349,15 +425,31 @@ else:
     st.sidebar.title(f"Hi, {st.session_state.username}!")
     st.sidebar.write(f"🪙 {st.session_state.points} Points")
 
-    pages = ["Home", "Robotics Lab", "Coding Arena", "Leaderboard",]
+    # Add Settings to pages
+    pages = ["Home", "Robotics Lab", "Coding Arena", "Leaderboard", "Settings"]
+
+    # Admin Panel Check
     if st.session_state.role == "Admin" or st.session_state.username.lower() == "dicrone":
         pages.append("Admin Panel")
 
     menu = st.sidebar.radio("Navigation", pages)
 
+    # --- SECURE LOGOUT HANDLER ---
+    st.sidebar.divider()
     if st.sidebar.button("Logout"):
-        st.session_state.logged_in = False
-        st.rerun()
+        st.session_state.confirm_logout = True
+
+    if st.session_state.get("confirm_logout", False):
+        st.sidebar.warning("Are you sure you want to log out?")
+        col_y, col_n = st.sidebar.columns(2)
+        if col_y.button("Yes"):
+            st.session_state.logged_in = False
+            st.session_state.confirm_logout = False
+            st.session_state.username = ""
+            st.rerun()
+        if col_n.button("No"):
+            st.session_state.confirm_logout = False
+            st.rerun()
 
     # Route to the correct page
     if menu == "Home":
@@ -368,7 +460,9 @@ else:
         show_coding_challenges()
     elif menu == "Leaderboard":
         show_leaderboard()
+    elif menu == "Settings":
+        show_settings()
     elif menu == "Admin Panel":
         show_admin()
-show_footer()
 
+show_footer()

@@ -146,13 +146,25 @@ def login_screen():
                     st.warning("New user? Create account!")
                     new_pass = st.text_input("🔑 Password", type="password")
                     if st.button("➕ Register", use_container_width=True) and new_pass:
+                        new_username = username.capitalize()
                         new_user = pd.DataFrame([{
-                            "Username": username.capitalize(),
-                            "Password": hash_password(new_pass), "Points": 0, "Role": "Student"
+                            "Username": new_username,
+                            "Password": hash_password(new_pass),
+                            "Points": 0,
+                            "Role": "Student"
                         }])
                         df = pd.concat([df, new_user], ignore_index=True)
                         save_data(df)
-                        st.success("🎉 Account created!")
+
+                        # Fix Bug 1: Actually log the user in and refresh the page
+                        st.session_state.update({
+                            "logged_in": True,
+                            "username": new_username,
+                            "points": 0,
+                            "role": "Student"
+                        })
+                        st.success("🎉 Account created! Logging you in...")
+                        st.rerun()
 
     with col2:
         lottie_bot = load_lottieurl("https://assets10.lottiefiles.com/packages/lf20_xh83pj1c.json")
@@ -189,20 +201,43 @@ def show_coding_challenges():
     st.title("⚔️ Challenges")
     diff = st.radio("Difficulty:", ["🟢 Easy (10)", "🟡 Medium (30)", "🔴 Hard (50)"], horizontal=True)
 
+    # Initialize trackers to fix infinite points glitch (Bug 3)
+    if "solved_easy" not in st.session_state: st.session_state.solved_easy = False
+    if "solved_medium" not in st.session_state: st.session_state.solved_medium = False
+    if "solved_hard" not in st.session_state: st.session_state.solved_hard = False
+
     if "Easy" in diff:
         st.code("for i in range(4):\n    print('Forward, Right')")
         ans = st.text_area("Code:")
-        if st.button("✅ Check") and "range(4)" in ans: update_points(st.session_state.username, 10)
+        if not st.session_state.solved_easy:
+            if st.button("✅ Check") and "range(4)" in ans:
+                update_points(st.session_state.username, 10)
+                st.session_state.solved_easy = True
+                st.rerun()
+        else:
+            st.success("✅ You already solved this challenge! Choose another difficulty.")
 
     elif "Medium" in diff:
         st.code("if lineSensor == LOW: reverse()")
         ans = st.text_area("Code:")
-        if st.button("✅ Check") and "LOW" in ans: update_points(st.session_state.username, 30)
+        if not st.session_state.solved_medium:
+            if st.button("✅ Check") and "LOW" in ans:
+                update_points(st.session_state.username, 30)
+                st.session_state.solved_medium = True
+                st.rerun()
+        else:
+            st.success("✅ You already solved this challenge! Choose another difficulty.")
 
     else:
         st.code("if distance < 20 and isMoving: motorSpeed = 0")
         ans = st.text_area("Code:")
-        if st.button("✅ Check") and "distance < 20" in ans: update_points(st.session_state.username, 50)
+        if not st.session_state.solved_hard:
+            if st.button("✅ Check") and "distance < 20" in ans:
+                update_points(st.session_state.username, 50)
+                st.session_state.solved_hard = True
+                st.rerun()
+        else:
+            st.success("✅ You already solved this challenge! Great job.")
 
 
 def show_leaderboard():
@@ -215,8 +250,14 @@ def show_leaderboard():
 
 def show_settings():
     st.title("⚙️ Settings")
-    if st.text_input("New Password", type="password") and st.button("Update"):
-        st.success("✅ Password changed!")
+    new_pass = st.text_input("New Password", type="password")
+    # Fix Bug 2: Actually save the password to the CSV
+    if st.button("Update") and new_pass:
+        df = load_data()
+        mask = df["Username"] == st.session_state.username
+        df.loc[mask, "Password"] = hash_password(new_pass)
+        save_data(df)
+        st.success("✅ Password changed successfully!")
 
 
 def show_admin():
@@ -226,7 +267,9 @@ def show_admin():
             df = load_data()
             df["Points"] = 0
             save_data(df)
-            st.error("💥 Reset!")
+            # Fix Bug 4: Update the admin's live session state so the change reflects instantly
+            st.session_state.points = 0
+            st.error("💥 All user points have been reset to 0!")
 
 
 # --- MAIN ---

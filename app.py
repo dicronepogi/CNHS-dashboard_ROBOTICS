@@ -46,8 +46,11 @@ def show_footer():
 # --- HELPERS ---
 @st.cache_data
 def load_lottieurl(url: str):
-    r = requests.get(url)
-    return r.json() if r.status_code == 200 else None
+    try:
+        r = requests.get(url)
+        return r.json() if r.status_code == 200 else None
+    except:
+        return None
 
 
 def get_badge(points):
@@ -65,7 +68,6 @@ DB_FILE = "cnhs_data.csv"
 
 
 def hash_password(password):
-    """SHA-256 with salt for Streamlit Cloud compatibility."""
     salt = "cnhs_robotics_salt_2024"
     return hashlib.sha256((password + salt).encode()).hexdigest()
 
@@ -74,20 +76,18 @@ def verify_password(password, hashed):
     return hash_password(password) == hashed
 
 
-@st.cache_data
 def load_data():
     if not os.path.exists(DB_FILE):
         admin_df = pd.DataFrame([{
-            "Username": "admin", "Password": hash_password("admin123"),
+            "Username": "Admin", "Password": hash_password("admin123"),
             "Points": 0, "Role": "Admin"
         }])
         admin_df.to_csv(DB_FILE, index=False)
         return admin_df
 
     df = pd.read_csv(DB_FILE)
-    for col in ["Points", "Role"]:
-        if col not in df.columns:
-            df[col] = 0 if col == "Points" else "Student"
+    if "Role" not in df.columns:
+        df["Role"] = "Student"
     return df
 
 
@@ -104,14 +104,13 @@ def update_points(username, points_to_add):
         st.session_state.points += points_to_add
         st.success(f"🎉 +{points_to_add} Points! Total: {st.session_state.points}")
         st.balloons()
-        st.progress(min(st.session_state.points / 1000, 1.0))
 
 
 # --- SESSION STATE ---
 if "logged_in" not in st.session_state:
     st.session_state.update({
         "logged_in": False, "username": "", "points": 0,
-        "role": "Student", "confirm_logout": False
+        "role": "Student"
     })
 
 
@@ -123,15 +122,14 @@ def login_screen():
     with col1:
         with st.container(border=True):
             st.subheader("🔐 Login")
-            username = st.text_input("👤 Username").strip()
+            username_input = st.text_input("👤 Username").strip()
 
-            if username:
+            if username_input:
                 df = load_data()
-                user_mask = df["Username"].str.lower() == username.lower()
+                user_mask = df["Username"].str.lower() == username_input.lower()
+
                 if user_mask.any():
                     user_row = df[user_mask].iloc[0]
-                    st.info(f"Welcome back, {user_row['Username']}!")
-
                     password = st.text_input("🔑 Password", type="password")
                     if st.button("🚀 Login", use_container_width=True):
                         if verify_password(password, user_row["Password"]):
@@ -144,36 +142,25 @@ def login_screen():
                             st.error("❌ Wrong password!")
                 else:
                     st.warning("New user? Create account!")
-                    new_pass = st.text_input("🔑 Password", type="password")
+                    new_pass = st.text_input("🔑 Create Password", type="password")
                     if st.button("➕ Register", use_container_width=True) and new_pass:
-                        new_username = username.capitalize()
                         new_user = pd.DataFrame([{
-                            "Username": new_username,
-                            "Password": hash_password(new_pass),
-                            "Points": 0,
-                            "Role": "Student"
+                            "Username": username_input.capitalize(),
+                            "Password": hash_password(new_pass), "Points": 0, "Role": "Student"
                         }])
                         df = pd.concat([df, new_user], ignore_index=True)
                         save_data(df)
-
-                        # Fix Bug 1: Actually log the user in and refresh the page
                         st.session_state.update({
-                            "logged_in": True,
-                            "username": new_username,
-                            "points": 0,
-                            "role": "Student"
+                            "logged_in": True, "username": username_input.capitalize(),
+                            "points": 0, "role": "Student"
                         })
-                        st.success("🎉 Account created! Logging you in...")
                         st.rerun()
 
     with col2:
         lottie_bot = load_lottieurl("https://assets10.lottiefiles.com/packages/lf20_xh83pj1c.json")
         if lottie_bot:
-            try:
-                from streamlit_lottie import st_lottie
-                st_lottie(lottie_bot, height=350, key="bot")
-            except:
-                pass
+            from streamlit_lottie import st_lottie
+            st_lottie(lottie_bot, height=350, key="bot")
 
 
 # --- PAGES ---
@@ -184,9 +171,7 @@ def show_home():
     col1.metric("User", st.session_state.username)
     col2.metric("Points", st.session_state.points)
     col3.markdown(f'<div class="badge {badge_class}">{badge}</div>', unsafe_allow_html=True)
-
-    st.progress(min(st.session_state.points / 1000, 1.0))
-    st.info("**New Sumo Bot challenges!** 🥇")
+    st.info("**New Challenges available! Check the Code tab.** 🥇")
 
 
 def show_robotics_lab():
@@ -201,75 +186,80 @@ def show_coding_challenges():
     st.title("⚔️ Challenges")
     diff = st.radio("Difficulty:", ["🟢 Easy (10)", "🟡 Medium (30)", "🔴 Hard (50)"], horizontal=True)
 
-    # Initialize trackers to fix infinite points glitch (Bug 3)
-    if "solved_easy" not in st.session_state: st.session_state.solved_easy = False
-    if "solved_medium" not in st.session_state: st.session_state.solved_medium = False
-    if "solved_hard" not in st.session_state: st.session_state.solved_hard = False
-
     if "Easy" in diff:
         st.code("for i in range(4):\n    print('Forward, Right')")
-        ans = st.text_area("Code:")
-        if not st.session_state.solved_easy:
-            if st.button("✅ Check") and "range(4)" in ans:
-                update_points(st.session_state.username, 10)
-                st.session_state.solved_easy = True
-                st.rerun()
-        else:
-            st.success("✅ You already solved this challenge! Choose another difficulty.")
-
+        ans = st.text_area("Analyze the code. What shape is drawn?")
+        if st.button("✅ Submit") and "square" in ans.lower(): update_points(st.session_state.username, 10)
     elif "Medium" in diff:
         st.code("if lineSensor == LOW: reverse()")
-        ans = st.text_area("Code:")
-        if not st.session_state.solved_medium:
-            if st.button("✅ Check") and "LOW" in ans:
-                update_points(st.session_state.username, 30)
-                st.session_state.solved_medium = True
-                st.rerun()
-        else:
-            st.success("✅ You already solved this challenge! Choose another difficulty.")
-
+        ans = st.text_area("Why would a robot reverse on LOW?")
+        if st.button("✅ Submit") and "line" in ans.lower(): update_points(st.session_state.username, 30)
     else:
-        st.code("if distance < 20 and isMoving: motorSpeed = 0")
-        ans = st.text_area("Code:")
-        if not st.session_state.solved_hard:
-            if st.button("✅ Check") and "distance < 20" in ans:
-                update_points(st.session_state.username, 50)
-                st.session_state.solved_hard = True
-                st.rerun()
-        else:
-            st.success("✅ You already solved this challenge! Great job.")
+        st.code("if distance < 20: motorSpeed = 0")
+        ans = st.text_area("What is the distance unit usually used here?")
+        if st.button("✅ Submit") and "cm" in ans.lower(): update_points(st.session_state.username, 50)
 
 
 def show_leaderboard():
     st.title("🏆 Leaderboard")
-    df = load_data().sort_values("Points", ascending=False).head(20)
-    df["Rank"] = range(1, len(df) + 1)
+    df = load_data().sort_values("Points", ascending=False)
     df["Badge"] = df["Points"].apply(lambda x: get_badge(x)[0])
-    st.dataframe(df[["Rank", "Username", "Points", "Badge"]])
+    st.table(df[["Username", "Points", "Badge"]])
 
 
 def show_settings():
     st.title("⚙️ Settings")
-    new_pass = st.text_input("New Password", type="password")
-    # Fix Bug 2: Actually save the password to the CSV
-    if st.button("Update") and new_pass:
+    new_pass = st.text_input("Change Password", type="password")
+    if st.button("Update Password") and new_pass:
         df = load_data()
-        mask = df["Username"] == st.session_state.username
-        df.loc[mask, "Password"] = hash_password(new_pass)
+        df.loc[df["Username"] == st.session_state.username, "Password"] = hash_password(new_pass)
         save_data(df)
-        st.success("✅ Password changed successfully!")
+        st.success("✅ Password updated!")
 
 
-def show_admin():
-    st.title("🔧 Admin")
-    if st.text_input("Password", type="password") == "dicroneadmin":
-        if st.button("🔥 Reset Points"):
-            df = load_data()
+def show_admin_panel():
+    st.title("🛠️ Admin Master Control")
+    admin_pass = st.text_input("Enter Admin Master Password", type="password")
+
+    if admin_pass == "dicrone123":
+        df = load_data()
+
+        st.subheader("👥 User Management")
+        st.dataframe(df[["Username", "Points", "Role"]], use_container_width=True)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("### 🗑️ Delete User")
+            user_to_delete = st.selectbox("Select user to remove:", df["Username"].tolist())
+            if st.button("Delete User", type="primary"):
+                if user_to_delete == st.session_state.username:
+                    st.error("You cannot delete yourself!")
+                else:
+                    df = df[df["Username"] != user_to_delete]
+                    save_data(df)
+                    st.success(f"User {user_to_delete} deleted!")
+                    st.rerun()
+
+        with col2:
+            st.markdown("### 🪙 Adjust Points")
+            target_user = st.selectbox("Select user to modify:", df["Username"].tolist(), key="adj")
+            amount = st.number_input("Amount (positive or negative)", value=0)
+            if st.button("Update User Points"):
+                df.loc[df["Username"] == target_user, "Points"] += amount
+                save_data(df)
+                st.success(f"Updated {target_user}'s points by {amount}!")
+                st.rerun()
+
+        st.divider()
+        st.subheader("🔥 Danger Zone")
+        if st.button("RESET ALL USER POINTS TO 0", use_container_width=True):
             df["Points"] = 0
             save_data(df)
-            # Fix Bug 4: Update the admin's live session state so the change reflects instantly
-            st.session_state.points = 0
-            st.error("💥 All user points have been reset to 0!")
+            st.warning("All points have been wiped!")
+            st.rerun()
+    elif admin_pass != "":
+        st.error("Incorrect Admin Password")
 
 
 # --- MAIN ---
@@ -279,12 +269,16 @@ if not st.session_state.logged_in:
     login_screen()
 else:
     st.sidebar.title(f"👋 {st.session_state.username}")
-    st.sidebar.metric("🪙", st.session_state.points)
+    st.sidebar.metric("🪙 Points", st.session_state.points)
 
-    pages = ["🏠 Home", "🔧 Lab", "⚔️ Code", "🏆 Board", "⚙️ Settings"]
-    if st.session_state.role == "Admin": pages.append("🔧 Admin")
+    menu_options = ["🏠 Home", "🔧 Lab", "⚔️ Code", "🏆 Board", "⚙️ Settings"]
 
-    page = st.sidebar.radio("Menu:", pages)
+    # Show Admin option if user is an Admin
+    if st.session_state.role == "Admin":
+        menu_options.append("🛠️ Admin")
+
+    page = st.sidebar.radio("Navigation", menu_options)
+
     if st.sidebar.button("🚪 Logout"):
         st.session_state.logged_in = False
         st.rerun()
@@ -299,7 +293,7 @@ else:
         show_leaderboard()
     elif page == "⚙️ Settings":
         show_settings()
-    elif page == "🔧 Admin":
-        show_admin()
+    elif page == "🛠️ Admin":
+        show_admin_panel()
 
 show_footer()
